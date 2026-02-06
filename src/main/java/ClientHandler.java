@@ -13,10 +13,10 @@ public class ClientHandler implements Runnable{
     private final Socket socket;
     
     public ClientHandler (Socket socket){
-        this.sokcet =socket;
+        this.socket =socket;
     }
     
-    @override
+    @Override
     public void run(){
         try(
             BufferedReader in  = new BufferedReader(
@@ -24,20 +24,32 @@ public class ClientHandler implements Runnable{
             BufferedWriter out = new BufferedWriter(
                 new OutputStreamWriter(socket.getOutputStream())) 
         ){
-            String request =  in.readLine();
-            System.out.println("Recieved: " + request);
+            String request;
+            while ((request = in.readLine()) != null) {
+            System.out.println("Received: " + request);
+            
+            if ("EXIT".equalsIgnoreCase(request)) {
+                out.write("GOODBYE");
+                out.newLine();
+                out.flush();
+                break;
+            }
             
             String response;
             
             if("PING".equalsIgnoreCase(request)){
                 response  = "PONG";
-            }else{
+            }else if ("TIME".equalsIgnoreCase(request)) {
+                response = new java.util.Date().toString();
+            } else if ("HELLO".equalsIgnoreCase(request)) {
+                response = "HELLO CLIENT!";
+            } else {
                 response = "ERROR: UNKNOWN COMMAND";
             }
             out.write(response);
             out.newLine();
             out.flush();
-            
+            }
         }catch (IOException e){
             System.err.println("Client handler error: " + e.getMessage());
         }finally{
