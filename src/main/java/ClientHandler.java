@@ -38,7 +38,7 @@ public class ClientHandler implements Runnable{
             String response;
             
             if("PING".equalsIgnoreCase(request)){
-                response  = "PONG";
+                response  = "PONG FROM STORAGE-1";
             }else if ("TIME".equalsIgnoreCase(request)) {
                 response = new java.util.Date().toString();
             } else if ("HELLO".equalsIgnoreCase(request)) {
