@@ -1,4 +1,4 @@
-FROM maven:3.9-eclipse-temurin-17 AS build
+﻿FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /build
 COPY . .
 RUN mvn -q -DskipTests -pl storage2 -am package

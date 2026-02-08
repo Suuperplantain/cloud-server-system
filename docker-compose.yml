@@ -1,8 +1,15 @@
-services:
+﻿services:
   storage1:
     build:
       context: .
       dockerfile: storage1/Dockerfile
+    environment:
+      STORAGE_NAME: "STORAGE-1"
+      STORAGE_ROOT: "/data"
+      CHUNK_SIZE: "65536"
+      AES_KEY_HEX: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    volumes:
+      - storage1_data:/data
     ports:
       - "9101:9101"
 
@@ -10,6 +17,13 @@ services:
     build:
       context: .
       dockerfile: storage2/Dockerfile
+    environment:
+      STORAGE_NAME: "STORAGE-2"
+      STORAGE_ROOT: "/data"
+      CHUNK_SIZE: "65536"
+      AES_KEY_HEX: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+    volumes:
+      - storage2_data:/data
     ports:
       - "9102:9102"
 
@@ -17,8 +31,16 @@ services:
     build:
       context: .
       dockerfile: load-balancer/Dockerfile
+    environment:
+      # TESTING values (change to 30/90 for final submission)
+      MIN_DELAY_SEC: "1"
+      MAX_DELAY_SEC: "2"
     depends_on:
       - storage1
       - storage2
     ports:
       - "9000:9000"
+
+volumes:
+  storage1_data:
+  storage2_data:
