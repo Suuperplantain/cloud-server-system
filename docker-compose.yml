@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  storage1:
+    build: ./storage1
+    container_name: storage1
+    ports:
+      - "9101:9101"
+
+  storage2:
+    build: ./storage2
+    container_name: storage2
+    ports:
+      - "9102:9102"
+
+  load-balancer:
+    build: ./load-balancer
+    container_name: load-balancer
+    depends_on:
+      - storage1
+      - storage2
+    ports:
+      - "9000:9000"
