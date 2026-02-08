@@ -23,6 +23,26 @@ public class LoadBalancer {
         index = (index + 1) % STORAGE_PORTS.size();
         return p;
     }
+    private static boolean isStorageHealthy(int port) {
+    try (Socket s = new Socket()) {
+        // Fast fail if the node is down
+        s.connect(new InetSocketAddress("localhost", port), 800);
+        s.setSoTimeout(800);
+
+        BufferedWriter out = new BufferedWriter(new OutputStreamWriter(s.getOutputStream()));
+        BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()));
+
+        out.write("PING");
+        out.newLine();
+        out.flush();
+
+        String resp = in.readLine();
+        return resp != null && resp.toUpperCase().startsWith("PONG");
+    } catch (IOException e) {
+        return false;
+    }
+}
+
 
     private static void handle(Socket client) {
     try (
@@ -35,7 +55,24 @@ public class LoadBalancer {
         String line;
 
         while ((line = clientIn.readLine()) != null) {
-            int targetPort = nextPort();
+            int attempts = STORAGE_PORTS.size();
+int targetPort = -1;
+
+while (attempts-- > 0) {
+    int p = nextPort();
+    if (isStorageHealthy(p)) {
+        targetPort = p;
+        break;
+    }
+}
+
+if (targetPort == -1) {
+    clientOut.write("ERROR: No storage nodes available");
+    clientOut.newLine();
+    clientOut.flush();
+    continue;
+}
+
 
             try (
                 Socket storage = new Socket("localhost", targetPort);
