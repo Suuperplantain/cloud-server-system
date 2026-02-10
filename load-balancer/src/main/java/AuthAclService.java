@@ -24,28 +24,63 @@ public class AuthAclService {
         }
     }
 
-    // --- DB connection (LB is in Docker => mysql hostname is "mysql") ---
+    // Backend: AUTH_DB=sqlite (default, VM) or mysql (Docker)
+    private static final String AUTH_BACKEND = System.getenv().getOrDefault("AUTH_DB", "sqlite").trim().toLowerCase();
+
     private static Connection db() throws SQLException {
+        if ("mysql".equals(AUTH_BACKEND)) {
+            return dbMysql();
+        }
+        return dbSqlite();
+    }
+
+    private static Connection dbMysql() throws SQLException {
         try {
-            Class.forName("com.mysql.cj.jdbc.Driver"); // force-load driver (catches missing driver instantly)
+            Class.forName("com.mysql.cj.jdbc.Driver");
         } catch (ClassNotFoundException e) {
             System.err.println("JDBC DRIVER MISSING: " + e);
             throw new SQLException("MySQL JDBC driver missing", e);
         }
-
         String host = System.getenv().getOrDefault("DB_HOST", "mysql");
         String port = System.getenv().getOrDefault("DB_PORT", "3306");
         String name = System.getenv().getOrDefault("DB_NAME", "cloud");
         String user = System.getenv().getOrDefault("DB_USER", "root");
         String pass = System.getenv().getOrDefault("DB_PASS", "root");
         String url = "jdbc:mysql://" + host + ":" + port + "/" + name + "?useSSL=false&allowPublicKeyRetrieval=true";
-
         try {
             return DriverManager.getConnection(url, user, pass);
         } catch (SQLException e) {
             System.err.println("DB CONNECT FAIL url=" + url + " user=" + user + " err=" + e);
             throw e;
         }
+    }
+
+    private static volatile boolean sqliteSchemaInitialized = false;
+
+    private static synchronized void ensureSqliteSchema(Connection c) throws SQLException {
+        if (sqliteSchemaInitialized) return;
+        try (Statement st = c.createStatement()) {
+            st.execute("CREATE TABLE IF NOT EXISTS users(username TEXT PRIMARY KEY, pass_hash TEXT NOT NULL, role TEXT NOT NULL)");
+            st.execute("CREATE TABLE IF NOT EXISTS files(id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, filename TEXT NOT NULL)");
+            st.execute("CREATE TABLE IF NOT EXISTS acl(owner TEXT, filename TEXT, grantee TEXT, can_read INTEGER NOT NULL, can_write INTEGER NOT NULL, PRIMARY KEY(owner, filename, grantee))");
+            st.execute("CREATE TABLE IF NOT EXISTS audit_log(id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, action TEXT, details TEXT, storage_node TEXT)");
+            st.execute("CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, username TEXT, role TEXT, expires_at INTEGER)");
+        }
+        sqliteSchemaInitialized = true;
+    }
+
+    private static Connection dbSqlite() throws SQLException {
+        try {
+            Class.forName("org.sqlite.JDBC");
+        } catch (ClassNotFoundException e) {
+            System.err.println("JDBC DRIVER MISSING: " + e);
+            throw new SQLException("SQLite JDBC driver missing", e);
+        }
+        String path = System.getenv().getOrDefault("SQLITE_PATH", "auth.db");
+        String url = "jdbc:sqlite:" + path;
+        Connection conn = DriverManager.getConnection(url);
+        ensureSqliteSchema(conn);
+        return conn;
     }
 
     // --- Audit log helper ---

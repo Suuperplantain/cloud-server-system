@@ -19,8 +19,9 @@ services:
       # artificial delay (keep if you use it)
       MIN_DELAY_SEC: "30"
       MAX_DELAY_SEC: "90"
-      
-      # MySQL connection for auth/acl/audit
+      # Auth backend: mysql in Docker (sqlite when unset, for VM without Docker)
+      AUTH_DB: mysql
+      # MySQL connection for auth/acl/audit (used when AUTH_DB=mysql)
       DB_HOST: mysql
       DB_PORT: "3306"
       DB_NAME: cloud
