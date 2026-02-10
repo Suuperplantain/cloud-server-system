@@ -1,46 +1,92 @@
-﻿services:
+version: "3.8"
+
+services:
+  load-balancer:
+    build:
+      context: .
+      dockerfile: load-balancer/Dockerfile
+    container_name: load-balancer
+    ports:
+      - "9000:9000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      storage1:
+        condition: service_started
+      storage2:
+        condition: service_started
+    environment:
+      # artificial delay (keep if you use it)
+      MIN_DELAY_SEC: "30"
+      MAX_DELAY_SEC: "90"
+      
+      # MySQL connection for auth/acl/audit
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: cloud
+      DB_USER: root
+      DB_PASS: root
+
   storage1:
     build:
       context: .
       dockerfile: storage1/Dockerfile
-    environment:
-      STORAGE_NAME: "STORAGE-1"
-      STORAGE_ROOT: "/data"
-      CHUNK_SIZE: "65536"
-      AES_KEY_HEX: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-    volumes:
-      - storage1_data:/data
+    container_name: storage1
     ports:
       - "9101:9101"
+    volumes:
+      - storage1_data:/data
 
   storage2:
     build:
       context: .
       dockerfile: storage2/Dockerfile
-    environment:
-      STORAGE_NAME: "STORAGE-2"
-      STORAGE_ROOT: "/data"
-      CHUNK_SIZE: "65536"
-      AES_KEY_HEX: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-    volumes:
-      - storage2_data:/data
+    container_name: storage2
     ports:
       - "9102:9102"
+    volumes:
+      - storage2_data:/data
 
-  load-balancer:
-    build:
-      context: .
-      dockerfile: load-balancer/Dockerfile
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
     environment:
-      # TESTING values (change to 30/90 for final submission)
-      MIN_DELAY_SEC: "1"
-      MAX_DELAY_SEC: "2"
-    depends_on:
-      - storage1
-      - storage2
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: cloud
+      MYSQL_USER: cloud
+      MYSQL_PASSWORD: cloud
     ports:
-      - "9000:9000"
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  sqlite:
+    image: nouchka/sqlite3
+    container_name: sqlite
+    command: ["tail", "-f", "/dev/null"]
+    volumes:
+      - sqlite_data:/data
+
+  partitioner:
+    image: eclipse-temurin:17-jre
+    container_name: partitioner
+    command: ["sh", "-lc", "echo 'Partitioner container running (stub)' && tail -f /dev/null"]
+    depends_on:
+      - load-balancer
+
+  host-manager:
+    image: eclipse-temurin:17-jre
+    container_name: host-manager
+    command: ["sh", "-c", "echo 'Host manager container running (stub)' && tail -f /dev/null"]
 
 volumes:
   storage1_data:
   storage2_data:
+  mysql_data:
+  sqlite_data:

@@ -1,385 +1,296 @@
 import java.io.*;
-import java.net.*;
+import java.sql.SQLException;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
-import java.security.SecureRandom;
-import java.util.*;
+import java.time.LocalDateTime;
+import java.util.Base64;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
-import javax.crypto.Cipher;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
 
 public class ClientHandler implements Runnable {
-  private final Socket socket;
 
-  // Storage root inside container
-  private static final Path ROOT = Paths.get(
-      Optional.ofNullable(System.getenv("STORAGE_ROOT")).orElse("/data")
-  ).toAbsolutePath().normalize();
+    private static final String STORAGE_NAME = "STORAGE-2";
+    private static final Path ROOT = Paths.get("/data").toAbsolutePath().normalize();
 
-  private static final String STORAGE_NAME =
-      Optional.ofNullable(System.getenv("STORAGE_NAME")).orElse("STORAGE-2");
+    private final Socket client;
 
-  // AES-256 key (32 bytes) from env as hex (64 chars). If missing -> uses a fixed dev key.
-  private static final SecretKey AES_KEY = new SecretKeySpec(
-      hexToBytes(Optional.ofNullable(System.getenv("AES_KEY_HEX"))
-        .orElse("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")),
-      "AES"
-  );
+    // file locks
+    private static final Map<String, ReentrantLock> LOCKS = new ConcurrentHashMap<>();
 
-  private static final SecureRandom RNG = new SecureRandom();
-  private static final int CHUNK_SIZE = Integer.parseInt(
-      Optional.ofNullable(System.getenv("CHUNK_SIZE")).orElse("65536") // 64KB
-  );
+    // metrics
+    private static final AtomicLong reqCount = new AtomicLong(0);
+    private static final AtomicLong pingCount = new AtomicLong(0);
+    private static final AtomicLong storeCount = new AtomicLong(0);
+    private static final AtomicLong loadCount = new AtomicLong(0);
+    private static final AtomicLong deleteCount = new AtomicLong(0);
+    private static final AtomicLong errCount = new AtomicLong(0);
 
-  // Per-file locks
-  private static final ConcurrentHashMap<String, ReentrantLock> LOCKS = new ConcurrentHashMap<>();
-  private static ReentrantLock lockFor(String k) { return LOCKS.computeIfAbsent(k, __ -> new ReentrantLock()); }
-
-  // Per-connection working directory
-  private Path cwd = ROOT;
-
-  public ClientHandler(Socket socket) { this.socket = socket; }
-
-  @Override
-  public void run() {
-    try {
-      Files.createDirectories(ROOT);
-      cwd = ROOT;
-    } catch (IOException ignored) {}
-
-    try (
-      BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-      BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8))
-    ) {
-      String line;
-      while ((line = in.readLine()) != null) {
-        line = line.trim();
-        if (line.isEmpty()) continue;
-
-        String resp;
-        try {
-          resp = handleCommand(line);
-        } catch (Exception e) {
-          resp = "ERROR: " + e.getClass().getSimpleName() + ": " + safeMsg(e.getMessage());
-        }
-
-        out.write(resp);
-        out.newLine();
-        out.flush();
-
-        if ("GOODBYE".equals(resp)) break;
-      }
-    } catch (IOException e) {
-      System.err.println("Client handler error: " + e.getMessage());
-    } finally {
-      try { socket.close(); } catch (IOException ignored) {}
+    public ClientHandler(Socket client) {
+        this.client = client;
     }
-  }
 
-  private String handleCommand(String line) throws Exception {
-    String[] parts = splitCmd(line);
-    String cmd = parts[0].toUpperCase(Locale.ROOT);
+    @Override
+    public void run() {
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+             PrintWriter out = new PrintWriter(new OutputStreamWriter(client.getOutputStream(), StandardCharsets.UTF_8), true)) {
 
-    switch (cmd) {
-      case "PING":
-        return "PONG FROM " + STORAGE_NAME;
+            Files.createDirectories(ROOT);
 
-      case "WHOAMI":
-        return STORAGE_NAME;
+            String line;
+            while ((line = in.readLine()) != null) {
+                reqCount.incrementAndGet();
+                line = line.trim();
+                if (line.isEmpty()) continue;
 
-      case "EXIT":
-        return "GOODBYE";
+                String resp = handle(line);
+                out.println(resp);
+            }
 
-      case "PWD":
-        return cwd.toString();
+        } catch (Exception e) {
+            errCount.incrementAndGet();
+            System.out.println(ts() + " [" + STORAGE_NAME + "] ERROR: " + e.getMessage());
+        } finally {
+            try { client.close(); } catch (Exception ignored) {}
+        }
+    }
 
-      case "CD": {
-        if (parts.length < 2) return "ERROR: usage CD <path>";
-        Path next = resolvePath(parts[1]);
-        if (!Files.exists(next) || !Files.isDirectory(next)) return "ERROR: not a directory";
-        cwd = next.normalize();
-        return "OK";
-      }
+    private String handle(String raw) {
+        try {
+            // existing commands
+            if (raw.equalsIgnoreCase("PING")) {
+                pingCount.incrementAndGet();
+                return "PONG FROM " + STORAGE_NAME;
+            }
+            if (raw.equalsIgnoreCase("TIME")) return LocalDateTime.now().toString();
+            if (raw.equalsIgnoreCase("HELLO")) return "HELLO FROM " + STORAGE_NAME;
 
-      case "MKDIR": {
-        if (parts.length < 2) return "ERROR: usage MKDIR <dir>";
-        Path p = resolvePath(parts[1]);
-        Files.createDirectories(p);
-        return "OK";
-      }
+            // metrics
+            if (raw.equalsIgnoreCase("STATS")) {
+                return "STATS " + STORAGE_NAME +
+                        " req=" + reqCount.get() +
+                        " ping=" + pingCount.get() +
+                        " store=" + storeCount.get() +
+                        " load=" + loadCount.get() +
+                        " del=" + deleteCount.get() +
+                        " err=" + errCount.get();
+            }
 
-      case "LS": {
-        Path p = (parts.length >= 2) ? resolvePath(parts[1]) : cwd;
-        if (!Files.exists(p)) return "ERROR: path not found";
-        if (Files.isRegularFile(p)) return p.getFileName().toString();
-        StringBuilder sb = new StringBuilder();
-        try (DirectoryStream<Path> ds = Files.newDirectoryStream(p)) {
-          for (Path x : ds) {
-            sb.append(x.getFileName().toString());
-            if (Files.isDirectory(x)) sb.append("/");
-            sb.append(" ");
-          }
+            // file ops:
+            // STORE <filename> <base64>
+            // LOAD <filename>
+            // DELETE <filename>
+            // LIST
+            String[] parts = raw.split(" ", 3);
+            String cmd = parts[0].toUpperCase();
+
+            switch (cmd) {
+                case "STORE":
+                    return store(parts);
+                case "LOAD":
+                    return load(parts);
+                case "DELETE":
+                    return delete(parts);
+                case "LIST":
+                    return listFiles();
+
+                // terminal-ish commands
+                case "WHOAMI":
+                    return "user@" + STORAGE_NAME.toLowerCase();
+                case "PS":
+                    return "PID TTY TIME CMD\n1 pts/0 00:00:00 " + STORAGE_NAME.toLowerCase();
+                case "MKDIR":
+                    return mkdir(raw);
+                case "LS":
+                    return ls(raw);
+                case "TREE":
+                    return tree(raw);
+                case "CP":
+                    return cp(raw);
+                case "MV":
+                    return mv(raw);
+                case "NANO":
+                    return nano(parts); // NANO <filename> <base64>
+                default:
+                    return "ERROR: Unknown command";
+            }
+        } catch (Exception e) {
+            errCount.incrementAndGet();
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    // required: artificial delay 30–90s (apply to file ops)
+    private void artificialDelay() {
+        int seconds = ThreadLocalRandom.current().nextInt(30, 91);
+        System.out.println(ts() + " [" + STORAGE_NAME + "] Artificial delay " + seconds + "s");
+        try { Thread.sleep(seconds * 1000L); } catch (InterruptedException ignored) {}
+    }
+
+    private String store(String[] parts) throws Exception {
+        if (parts.length < 3) return "ERROR: STORE requires filename and base64";
+        String filename = safeName(parts[1]);
+        String b64 = parts[2];
+
+        ReentrantLock lock = LOCKS.computeIfAbsent(filename, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            artificialDelay();
+            byte[] data = Base64.getDecoder().decode(b64);
+            Path p = ROOT.resolve(filename).normalize();
+            ensureInsideRoot(p);
+            Files.write(p, data, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            String owner = "demo";
+            MySqlStore.ensureUser(owner);
+            try { MySqlStore.upsertFileMeta(owner, filename, STORAGE_NAME, data.length); } catch (SQLException ignored) {}
+            MySqlStore.log(owner, "STORE", filename + " bytes=" + data.length, STORAGE_NAME);
+            storeCount.incrementAndGet();
+            System.out.println(ts() + " [" + STORAGE_NAME + "] STORED " + filename + " (" + data.length + " bytes)");
+            return "OK: STORED " + filename + " ON " + STORAGE_NAME;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private String load(String[] parts) throws Exception {
+        if (parts.length < 2) return "ERROR: LOAD requires filename";
+        String filename = safeName(parts[1]);
+
+        ReentrantLock lock = LOCKS.computeIfAbsent(filename, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            artificialDelay();
+            Path p = ROOT.resolve(filename).normalize();
+            ensureInsideRoot(p);
+            if (!Files.exists(p)) return "ERROR: Not found";
+            byte[] data = Files.readAllBytes(p);
+            loadCount.incrementAndGet();
+            String b64 = Base64.getEncoder().encodeToString(data);
+            System.out.println(ts() + " [" + STORAGE_NAME + "] LOADED " + filename + " (" + data.length + " bytes)");
+            return "OK: " + filename + " " + b64;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private String delete(String[] parts) throws Exception {
+        if (parts.length < 2) return "ERROR: DELETE requires filename";
+        String filename = safeName(parts[1]);
+
+        ReentrantLock lock = LOCKS.computeIfAbsent(filename, k -> new ReentrantLock());
+        lock.lock();
+        try {
+            artificialDelay();
+            Path p = ROOT.resolve(filename).normalize();
+            ensureInsideRoot(p);
+            if (!Files.exists(p)) return "ERROR: Not found";
+            Files.delete(p);
+            String owner = "demo";
+            try { MySqlStore.deleteFileMeta(owner, filename); } catch (SQLException ignored) {}
+            MySqlStore.log(owner, "DELETE", filename, STORAGE_NAME);
+            deleteCount.incrementAndGet();
+            System.out.println(ts() + " [" + STORAGE_NAME + "] DELETED " + filename);
+            return "OK: DELETED " + filename + " ON " + STORAGE_NAME;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private String listFiles() throws Exception {
+        Files.createDirectories(ROOT);
+        StringBuilder sb = new StringBuilder("OK: FILES\n");
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(ROOT)) {
+            for (Path p : ds) {
+                if (Files.isRegularFile(p)) sb.append(p.getFileName()).append("\n");
+            }
         }
         return sb.toString().trim();
-      }
+    }
 
-      case "TREE": {
-        Path p = (parts.length >= 2) ? resolvePath(parts[1]) : cwd;
-        if (!Files.exists(p)) return "ERROR: path not found";
-        return tree(p);
-      }
+    // terminal emulation (minimal)
+    private String mkdir(String raw) throws Exception {
+        String[] p = raw.split(" ", 2);
+        if (p.length < 2) return "ERROR: MKDIR <dir>";
+        Path dir = ROOT.resolve(safeRel(p[1])).normalize();
+        ensureInsideRoot(dir);
+        Files.createDirectories(dir);
+        return "OK: MKDIR " + dir.getFileName();
+    }
 
-      // FILE PUT: PUT <filename> <base64Data>
-      // Stores encrypted chunk files: <name>.part00000, ... plus <name>.meta
-      case "PUT": {
-        if (parts.length < 3) return "ERROR: usage PUT <filename> <base64>";
-        String name = parts[1];
-        byte[] plain = Base64.getDecoder().decode(parts[2]);
-        byte[] enc = aesGcmEncrypt(plain);
-
-        ReentrantLock L = lockFor(keyFor(name));
-        L.lock();
-        try {
-          writeChunked(name, enc);
-          return "OK: STORED " + name + " BYTES=" + plain.length;
-        } finally { L.unlock(); }
-      }
-
-      // GET: GET <filename> -> returns base64(plaintext)
-      case "GET": {
-        if (parts.length < 2) return "ERROR: usage GET <filename>";
-        String name = parts[1];
-
-        ReentrantLock L = lockFor(keyFor(name));
-        L.lock();
-        try {
-          byte[] enc = readChunked(name);
-          byte[] plain = aesGcmDecrypt(enc);
-          return "OK: " + Base64.getEncoder().encodeToString(plain);
-        } finally { L.unlock(); }
-      }
-
-      // DEL: DEL <filename>
-      case "DEL": {
-        if (parts.length < 2) return "ERROR: usage DEL <filename>";
-        String name = parts[1];
-
-        ReentrantLock L = lockFor(keyFor(name));
-        L.lock();
-        try {
-          deleteChunked(name);
-          return "OK: DELETED " + name;
-        } finally { L.unlock(); }
-      }
-
-      // MV: MV <src> <dst>  (for stored chunked files)
-      case "MV": {
-        if (parts.length < 3) return "ERROR: usage MV <src> <dst>";
-        String src = parts[1], dst = parts[2];
-
-        ReentrantLock A = lockFor(keyFor(src));
-        ReentrantLock B = lockFor(keyFor(dst));
-        // avoid deadlock by consistent order
-        List<ReentrantLock> locks = Arrays.asList(A, B);
-        locks.sort(Comparator.comparingInt(System::identityHashCode));
-        locks.get(0).lock(); locks.get(1).lock();
-        try {
-          moveChunked(src, dst);
-          return "OK";
-        } finally {
-          locks.get(1).unlock(); locks.get(0).unlock();
+    private String ls(String raw) throws Exception {
+        String[] p = raw.split(" ", 2);
+        Path dir = (p.length < 2) ? ROOT : ROOT.resolve(safeRel(p[1])).normalize();
+        ensureInsideRoot(dir);
+        if (!Files.exists(dir) || !Files.isDirectory(dir)) return "ERROR: Not a directory";
+        StringBuilder sb = new StringBuilder("OK: LS\n");
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+            for (Path x : ds) sb.append(x.getFileName()).append("\n");
         }
-      }
-
-      // CP: CP <src> <dst>
-      case "CP": {
-        if (parts.length < 3) return "ERROR: usage CP <src> <dst>";
-        String src = parts[1], dst = parts[2];
-
-        ReentrantLock A = lockFor(keyFor(src));
-        ReentrantLock B = lockFor(keyFor(dst));
-        List<ReentrantLock> locks = Arrays.asList(A, B);
-        locks.sort(Comparator.comparingInt(System::identityHashCode));
-        locks.get(0).lock(); locks.get(1).lock();
-        try {
-          copyChunked(src, dst);
-          return "OK";
-        } finally {
-          locks.get(1).unlock(); locks.get(0).unlock();
-        }
-      }
-
-      default:
-        return "ERROR: UNKNOWN COMMAND";
-    }
-  }
-
-  // ---------- Chunking helpers ----------
-  private void writeChunked(String name, byte[] data) throws IOException {
-    Path base = resolvePath(name);
-    Path meta = metaPath(base);
-
-    deleteChunked(name);
-
-    int chunks = (data.length + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    for (int i = 0; i < chunks; i++) {
-      int from = i * CHUNK_SIZE;
-      int to = Math.min(data.length, from + CHUNK_SIZE);
-      byte[] part = Arrays.copyOfRange(data, from, to);
-      Files.write(partPath(base, i), part, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        return sb.toString().trim();
     }
 
-    String metaTxt = "chunks=" + chunks + "\nsize=" + data.length + "\n";
-    Files.write(meta, metaTxt.getBytes(StandardCharsets.UTF_8), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-  }
-
-  private byte[] readChunked(String name) throws IOException {
-    Path base = resolvePath(name);
-    Path meta = metaPath(base);
-    if (!Files.exists(meta)) throw new FileNotFoundException("missing meta for " + name);
-
-    int chunks = parseMetaChunks(meta);
-    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-    for (int i = 0; i < chunks; i++) {
-      Path p = partPath(base, i);
-      if (!Files.exists(p)) throw new FileNotFoundException("missing chunk " + i);
-      baos.write(Files.readAllBytes(p));
+    private String tree(String raw) throws Exception {
+        String[] p = raw.split(" ", 2);
+        Path dir = (p.length < 2) ? ROOT : ROOT.resolve(safeRel(p[1])).normalize();
+        ensureInsideRoot(dir);
+        if (!Files.exists(dir) || !Files.isDirectory(dir)) return "ERROR: Not a directory";
+        StringBuilder sb = new StringBuilder("OK: TREE\n");
+        Files.walk(dir).forEach(path -> {
+            Path rel = ROOT.relativize(path);
+            sb.append(rel.toString().isEmpty() ? "." : rel.toString()).append("\n");
+        });
+        return sb.toString().trim();
     }
-    return baos.toByteArray();
-  }
 
-  private void deleteChunked(String name) throws IOException {
-    Path base = resolvePath(name);
-    Path meta = metaPath(base);
-    if (Files.exists(meta)) {
-      int chunks = parseMetaChunks(meta);
-      for (int i = 0; i < chunks; i++) Files.deleteIfExists(partPath(base, i));
-      Files.deleteIfExists(meta);
-    } else {
-      // best-effort: delete common chunk names anyway
-      for (int i = 0; i < 10000; i++) {
-        Path p = partPath(base, i);
-        if (!Files.exists(p)) break;
-        Files.deleteIfExists(p);
-      }
-      Files.deleteIfExists(meta);
+    private String cp(String raw) throws Exception {
+        String[] p = raw.split(" ", 3);
+        if (p.length < 3) return "ERROR: CP <src> <dst>";
+        Path src = ROOT.resolve(safeRel(p[1])).normalize();
+        Path dst = ROOT.resolve(safeRel(p[2])).normalize();
+        ensureInsideRoot(src); ensureInsideRoot(dst);
+        Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+        return "OK: CP";
     }
-  }
 
-  private void moveChunked(String src, String dst) throws IOException {
-    Path s = resolvePath(src);
-    Path d = resolvePath(dst);
-
-    Path sm = metaPath(s);
-    if (!Files.exists(sm)) throw new FileNotFoundException("missing meta for " + src);
-    int chunks = parseMetaChunks(sm);
-
-    Files.createDirectories(d.getParent() == null ? cwd : d.getParent());
-
-    Files.move(sm, metaPath(d), StandardCopyOption.REPLACE_EXISTING);
-    for (int i = 0; i < chunks; i++) {
-      Files.move(partPath(s, i), partPath(d, i), StandardCopyOption.REPLACE_EXISTING);
+    private String mv(String raw) throws Exception {
+        String[] p = raw.split(" ", 3);
+        if (p.length < 3) return "ERROR: MV <src> <dst>";
+        Path src = ROOT.resolve(safeRel(p[1])).normalize();
+        Path dst = ROOT.resolve(safeRel(p[2])).normalize();
+        ensureInsideRoot(src); ensureInsideRoot(dst);
+        Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING);
+        return "OK: MV";
     }
-  }
 
-  private void copyChunked(String src, String dst) throws IOException {
-    Path s = resolvePath(src);
-    Path d = resolvePath(dst);
-
-    Path sm = metaPath(s);
-    if (!Files.exists(sm)) throw new FileNotFoundException("missing meta for " + src);
-    int chunks = parseMetaChunks(sm);
-
-    Files.createDirectories(d.getParent() == null ? cwd : d.getParent());
-
-    Files.copy(sm, metaPath(d), StandardCopyOption.REPLACE_EXISTING);
-    for (int i = 0; i < chunks; i++) {
-      Files.copy(partPath(s, i), partPath(d, i), StandardCopyOption.REPLACE_EXISTING);
+    private String nano(String[] parts) throws Exception {
+        if (parts.length < 3) return "ERROR: NANO <filename> <base64>";
+        String filename = safeName(parts[1]);
+        byte[] data = Base64.getDecoder().decode(parts[2]);
+        Path p = ROOT.resolve(filename).normalize();
+        ensureInsideRoot(p);
+        Files.write(p, data, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        return "OK: NANO wrote " + filename;
     }
-  }
 
-  private static Path metaPath(Path base) { return base.resolveSibling(base.getFileName().toString() + ".meta"); }
-  private static Path partPath(Path base, int idx) {
-    return base.resolveSibling(String.format("%s.part%05d", base.getFileName().toString(), idx));
-  }
-
-  private static int parseMetaChunks(Path meta) throws IOException {
-    List<String> lines = Files.readAllLines(meta, StandardCharsets.UTF_8);
-    for (String l : lines) {
-      l = l.trim();
-      if (l.startsWith("chunks=")) return Integer.parseInt(l.substring("chunks=".length()).trim());
+    private static void ensureInsideRoot(Path p) {
+        if (!p.startsWith(ROOT)) throw new IllegalArgumentException("Path escapes root");
     }
-    return 0;
-  }
 
-  // ---------- AES-GCM ----------
-  private static byte[] aesGcmEncrypt(byte[] plain) throws Exception {
-    byte[] iv = new byte[12];
-    RNG.nextBytes(iv);
-    Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
-    c.init(Cipher.ENCRYPT_MODE, AES_KEY, new GCMParameterSpec(128, iv));
-    byte[] ct = c.doFinal(plain);
-
-    ByteArrayOutputStream out = new ByteArrayOutputStream();
-    out.write(iv);
-    out.write(ct);
-    return out.toByteArray();
-  }
-
-  private static byte[] aesGcmDecrypt(byte[] enc) throws Exception {
-    if (enc.length < 12 + 16) throw new IllegalArgumentException("ciphertext too short");
-    byte[] iv = Arrays.copyOfRange(enc, 0, 12);
-    byte[] ct = Arrays.copyOfRange(enc, 12, enc.length);
-
-    Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
-    c.init(Cipher.DECRYPT_MODE, AES_KEY, new GCMParameterSpec(128, iv));
-    return c.doFinal(ct);
-  }
-
-  // ---------- Path + parsing ----------
-  private Path resolvePath(String raw) {
-    Path p = Paths.get(raw);
-    if (!p.isAbsolute()) p = cwd.resolve(p);
-    p = p.normalize();
-    if (!p.startsWith(ROOT)) throw new SecurityException("path escape blocked");
-    return p;
-  }
-
-  private static String[] splitCmd(String line) {
-    // allow base64 payload containing =+/ chars; split into max 3 parts for PUT
-    String[] a = line.split("\\s+", 3);
-    return a;
-  }
-
-  private static String keyFor(String name) { return name.toLowerCase(Locale.ROOT); }
-
-  private static String safeMsg(String s) { return (s == null) ? "" : s.replace("\n"," ").replace("\r"," "); }
-
-  private static byte[] hexToBytes(String hex) {
-    hex = hex.trim();
-    if (hex.length() % 2 != 0) throw new IllegalArgumentException("AES_KEY_HEX must have even length");
-    byte[] out = new byte[hex.length()/2];
-    for (int i=0;i<out.length;i++){
-      int hi = Character.digit(hex.charAt(i*2),16);
-      int lo = Character.digit(hex.charAt(i*2+1),16);
-      if (hi<0||lo<0) throw new IllegalArgumentException("invalid hex");
-      out[i]=(byte)((hi<<4)|lo);
+    private static String safeName(String s) {
+        if (s.contains("/") || s.contains("\\") || s.contains(".."))
+            throw new IllegalArgumentException("Bad filename");
+        return s;
     }
-    return out;
-  }
 
-  private static String tree(Path root) throws IOException {
-    StringBuilder sb = new StringBuilder();
-    Files.walk(root).forEach(p -> {
-      Path rel = ROOT.relativize(p);
-      String s = rel.toString();
-      if (s.isEmpty()) s = ".";
-      if (Files.isDirectory(p)) s += "/";
-      sb.append(s).append(" ");
-    });
-    return sb.toString().trim();
-  }
+    private static String safeRel(String s) {
+        if (s.contains("..")) throw new IllegalArgumentException("Bad path");
+        return s.replace("\\", "/");
+    }
+
+    private static String ts() {
+        return LocalDateTime.now().toString();
+    }
 }

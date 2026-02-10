@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<BorderPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+            fx:controller="MainController">
+
+    <top>
+        <VBox spacing="8" BorderPane.alignment="CENTER">
+            <padding><Insets top="10" right="10" bottom="10" left="10"/></padding>
+            <Label text="Cloud System Operations" style="-fx-font-size: 18px; -fx-font-weight: bold;"/>
+            <Label fx:id="sessionLabel" text="Session: (loading...)" />
+        </VBox>
+    </top>
+
+    <center>
+        <SplitPane dividerPositions="0.48">
+            <VBox spacing="10">
+                <padding><Insets top="10" right="10" bottom="10" left="10"/></padding>
+
+                <HBox spacing="10">
+                    <Button text="PING" onAction="#onPing"/>
+                    <Button text="LIST" onAction="#onList"/>
+                    <Button text="STORE" onAction="#onStore"/>
+                    <Button text="LOAD" onAction="#onLoad"/>
+                    <Button text="DELETE" onAction="#onDelete"/>
+                </HBox>
+
+                <GridPane hgap="10" vgap="10">
+                    <Label text="Filename:" GridPane.rowIndex="0" GridPane.columnIndex="0"/>
+                    <TextField fx:id="filenameField" promptText="e.g., hello.txt" GridPane.rowIndex="0" GridPane.columnIndex="1"/>
+
+                    <Label text="Content:" GridPane.rowIndex="1" GridPane.columnIndex="0"/>
+                    <TextArea fx:id="contentArea" prefRowCount="12" wrapText="true"
+                              promptText="Type content here. STORE Base64-encodes before sending."
+                              GridPane.rowIndex="1" GridPane.columnIndex="1"/>
+                </GridPane>
+            </VBox>
+
+            <VBox spacing="10">
+                <padding><Insets top="10" right="10" bottom="10" left="10"/></padding>
+                <Label text="Output / Responses:" style="-fx-font-weight: bold;"/>
+                <TextArea fx:id="outputArea" editable="false" wrapText="true"/>
+            </VBox>
+        </SplitPane>
+    </center>
+</BorderPane>
