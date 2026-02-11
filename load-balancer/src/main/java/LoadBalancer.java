@@ -284,15 +284,19 @@ public class LoadBalancer {
         }
     }
 
+    // Timing: queue wait immediately after take(); delay wraps only maybeDelay(); forward wraps only forward().
+    private static volatile boolean timingDebugLogged = false;
+
     private static void dispatchLoop() {
         while (true) {
             try {
                 Request req = queue.take();
 
-                // Time spent waiting in the scheduler queue
+                // Queue wait: enqueue -> dequeue
                 long dequeueNs = System.nanoTime();
+                long queueMs = 0L;
                 if (req.enqueuedAtNs > 0L) {
-                    long queueMs = (dequeueNs - req.enqueuedAtNs) / 1_000_000L;
+                    queueMs = (dequeueNs - req.enqueuedAtNs) / 1_000_000L;
                     Metrics.recordQueueWaitMs(queueMs);
                 }
 
@@ -303,25 +307,30 @@ public class LoadBalancer {
                     continue;
                 }
 
-                // Record node hit IMMEDIATELY after selection
                 String nodeName = getNodeStorageName(node);
-                System.out.println("[DEBUG] Recording node hit: " + nodeName + " for payload: " + req.payload.substring(0, Math.min(30, req.payload.length())));
                 Metrics.recordNodeHit(nodeName);
 
-                // Apply artificial delay
+                // Delay: only maybeDelay() (storage must not sleep or FORWARD_MS would include it)
+                long delayMs = 0L;
                 if (req.fileOp) {
                     long delayStart = System.nanoTime();
                     maybeDelay();
-                    long delayMs = (System.nanoTime() - delayStart) / 1_000_000L;
+                    delayMs = (System.nanoTime() - delayStart) / 1_000_000L;
                     Metrics.recordDelayMs(delayMs);
                 }
 
+                // Forward: only forward() call (network + storage I/O, no LB delay)
                 long fwdStart = System.nanoTime();
                 String resp = forward(node, req.payload);
                 long forwardMs = (System.nanoTime() - fwdStart) / 1_000_000L;
                 Metrics.recordForwardMs(forwardMs);
                 routedReq.incrementAndGet();
                 req.future.complete(resp);
+
+                if (req.fileOp && !timingDebugLogged) {
+                    timingDebugLogged = true;
+                    System.out.println("[LB timing] queueMs=" + queueMs + " delayMs=" + delayMs + " forwardMs=" + forwardMs);
+                }
 
             } catch (Exception e) {
                 System.err.println("[ERROR] dispatchLoop: " + e.getMessage());
@@ -365,12 +374,9 @@ public class LoadBalancer {
     }
 
     private static String getNodeStorageName(Node node) {
-        if (node.host.equals("storage1") && node.port == 9101) {
-            return "STORAGE-1";
-        } else if (node.host.equals("storage2") && node.port == 9102) {
-            return "STORAGE-2";
-        }
-        return node.host;
+        if (node.port == 9101) return "STORAGE-1";
+        if (node.port == 9102) return "STORAGE-2";
+        return node.host + ":" + node.port;
     }
 
     private static boolean isHealthy(Node node) {

@@ -7,7 +7,6 @@ import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -133,12 +132,7 @@ public class ClientHandler implements Runnable {
         }
     }
 
-    // required: artificial delay 30–90s (apply to file ops)
-    private void artificialDelay() {
-        int seconds = ThreadLocalRandom.current().nextInt(30, 91);
-        System.out.println(ts() + " [" + STORAGE_NAME + "] Artificial delay " + seconds + "s");
-        try { Thread.sleep(seconds * 1000L); } catch (InterruptedException ignored) {}
-    }
+    // No artificial delay on storage: LB applies maybeDelay(); storage responds promptly so FORWARD_MS is accurate.
 
     private String store(String[] parts) throws Exception {
         if (parts.length < 3) return "ERROR: STORE requires filename and base64";
@@ -148,7 +142,6 @@ public class ClientHandler implements Runnable {
         ReentrantLock lock = LOCKS.computeIfAbsent(filename, k -> new ReentrantLock());
         lock.lock();
         try {
-            artificialDelay();
             byte[] data = Base64.getDecoder().decode(b64);
             Path p = ROOT.resolve(filename).normalize();
             ensureInsideRoot(p);
@@ -172,7 +165,6 @@ public class ClientHandler implements Runnable {
         ReentrantLock lock = LOCKS.computeIfAbsent(filename, k -> new ReentrantLock());
         lock.lock();
         try {
-            artificialDelay();
             Path p = ROOT.resolve(filename).normalize();
             ensureInsideRoot(p);
             if (!Files.exists(p)) return "ERROR: Not found";
@@ -193,7 +185,6 @@ public class ClientHandler implements Runnable {
         ReentrantLock lock = LOCKS.computeIfAbsent(filename, k -> new ReentrantLock());
         lock.lock();
         try {
-            artificialDelay();
             Path p = ROOT.resolve(filename).normalize();
             ensureInsideRoot(p);
             if (!Files.exists(p)) return "ERROR: Not found";
