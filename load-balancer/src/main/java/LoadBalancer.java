@@ -10,9 +10,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class LoadBalancer {
 
+    private static final boolean VM_MODE = "sqlite".equalsIgnoreCase(System.getenv().getOrDefault("AUTH_DB", "sqlite"));
     private static final List<Node> NODES = List.of(
-            new Node("storage1", 9101),
-            new Node("storage2", 9102)
+            new Node(VM_MODE ? "localhost" : "storage1", 9101),
+            new Node(VM_MODE ? "localhost" : "storage2", 9102)
     );
 
     private static final int MIN_DELAY_SEC = Integer.parseInt(
