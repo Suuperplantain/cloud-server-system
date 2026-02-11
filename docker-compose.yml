@@ -35,6 +35,8 @@ services:
     container_name: storage1
     ports:
       - "9101:9101"
+    environment:
+      STORE_DIR: /data
     volumes:
       - storage1_data:/data
 
@@ -45,6 +47,8 @@ services:
     container_name: storage2
     ports:
       - "9102:9102"
+    environment:
+      STORE_DIR: /data
     volumes:
       - storage2_data:/data
 

@@ -14,7 +14,17 @@ import java.util.concurrent.locks.ReentrantLock;
 public class ClientHandler implements Runnable {
 
     private static final String STORAGE_NAME = "STORAGE-1";
-    private static final Path ROOT = Paths.get("/data").toAbsolutePath().normalize();
+    private static final String STORE_DIR = System.getenv().getOrDefault("STORE_DIR", "./data");
+    private static final Path ROOT;
+
+    static {
+        ROOT = Paths.get(STORE_DIR).toAbsolutePath().normalize();
+        try {
+            Files.createDirectories(ROOT);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not create STORE_DIR: " + ROOT, e);
+        }
+    }
 
     private final Socket client;
 
