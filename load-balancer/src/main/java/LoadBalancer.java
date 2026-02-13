@@ -343,38 +343,44 @@ public class LoadBalancer {
                 long forwardMsTotal = 0L;
                 String resp;
 
-                boolean usedFallback = false;
-
                 if (req.fileOp && (isLoad || isDelete) && fallbackNode != null) {
                     // First attempt: primary node
                     long fwdStart = System.nanoTime();
                     resp = forward(primaryNode, req.payload);
                     forwardMsTotal += (System.nanoTime() - fwdStart) / 1_000_000L;
 
-                    boolean notFound = resp != null && resp.toUpperCase(Locale.ROOT).startsWith("ERR NOT_FOUND");
+                    String firstResp = resp;
+                    String secondResp = null;
+                    boolean retried = false;
+
+                    boolean notFound = resp != null
+                            && resp.toUpperCase(Locale.ROOT).contains("NOT_FOUND");
 
                     if (notFound) {
-                        usedFallback = true;
+                        retried = true;
                         // Second attempt: fallback node
                         long fwdStart2 = System.nanoTime();
                         String resp2 = forward(fallbackNode, req.payload);
                         forwardMsTotal += (System.nanoTime() - fwdStart2) / 1_000_000L;
+                        secondResp = resp2;
 
-                        // If fallback succeeds (anything other than ERR NOT_FOUND), use that response.
-                        if (resp2 != null && !resp2.toUpperCase(Locale.ROOT).startsWith("ERR NOT_FOUND")) {
+                        // If fallback succeeds (anything other than NOT_FOUND), use that response.
+                        if (resp2 != null && !resp2.toUpperCase(Locale.ROOT).contains("NOT_FOUND")) {
                             resp = resp2;
                         }
-
-                        // Minimal debug logging for demo: file, primary, fallback used.
-                        String fileKey = extractFileKeyForDebug(trimmed);
-                        String primaryName = getNodeStorageName(primaryNode);
-                        String fallbackName = getNodeStorageName(fallbackNode);
-                        System.out.println("[LB debug] op=" + (isLoad ? "LOAD" : "DELETE") +
-                                " file=" + fileKey +
-                                " primary=" + primaryName +
-                                " fallbackUsed=" + usedFallback +
-                                " fallbackNode=" + fallbackName);
                     }
+
+                    // Debug logging for demo: op, file, primary, first/second responses, retry flag.
+                    String fileKey = extractFileKeyForDebug(trimmed);
+                    String primaryName = getNodeStorageName(primaryNode);
+                    String fallbackName = getNodeStorageName(fallbackNode);
+                    System.out.println("[LB debug] op=" + (isLoad ? "LOAD" : "DELETE") +
+                            " file=" + fileKey +
+                            " primary=" + primaryName +
+                            " firstResp=\"" + (firstResp == null ? "" : firstResp) + "\"" +
+                            " retried=" + retried +
+                            " secondResp=\"" + (secondResp == null ? "" : secondResp) + "\"" +
+                            " fallbackNode=" + fallbackName);
                 } else {
                     long fwdStart = System.nanoTime();
                     resp = forward(primaryNode, req.payload);
