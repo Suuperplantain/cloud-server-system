@@ -387,7 +387,7 @@ public class LoadBalancer {
 
                 if (req.fileOp && !timingDebugLogged) {
                     timingDebugLogged = true;
-                    System.out.println("[LB timing] queueMs=" + queueMs + " delayMs=" + delayMs + " forwardMs=" + forwardMs);
+                    System.out.println("[LB timing] queueMs=" + queueMs + " delayMs=" + delayMs + " forwardMs=" + forwardMsTotal);
                 }
 
             } catch (Exception e) {
