@@ -300,15 +300,34 @@ public class LoadBalancer {
                     Metrics.recordQueueWaitMs(queueMs);
                 }
 
-                Node node = pickHealthyNode(req.payload, req.fileOp);
-                if (node == null) {
-                    rejectedReq.incrementAndGet();
-                    req.future.complete("ERROR: No storage nodes available");
-                    continue;
+                // Choose node(s) for this request.
+                Node primaryNode;
+                Node fallbackNode = null;
+
+                String trimmed = req.payload.trim();
+                String upper = trimmed.toUpperCase(Locale.ROOT);
+                boolean isLoad = upper.startsWith("LOAD ");
+                boolean isDelete = upper.startsWith("DELETE ");
+
+                if (req.fileOp && (isLoad || isDelete)) {
+                    // For LOAD/DELETE, use deterministic filename-based routing,
+                    // with a single fallback to the other node if NOT_FOUND.
+                    int primaryIdx = stableIndex(trimmed);
+                    primaryNode = NODES.get(primaryIdx);
+                    if (NODES.size() > 1) {
+                        fallbackNode = NODES.get((primaryIdx + 1) % NODES.size());
+                    }
+                } else {
+                    // Existing health-based routing for other ops.
+                    primaryNode = pickHealthyNode(req.payload, req.fileOp);
+                    if (primaryNode == null) {
+                        rejectedReq.incrementAndGet();
+                        req.future.complete("ERROR: No storage nodes available");
+                        continue;
+                    }
                 }
 
-                String nodeName = getNodeStorageName(node);
-                Metrics.recordNodeHit(nodeName);
+                Metrics.recordNodeHit(getNodeStorageName(primaryNode));
 
                 // Delay: only maybeDelay() (storage must not sleep or FORWARD_MS would include it)
                 long delayMs = 0L;
@@ -319,11 +338,50 @@ public class LoadBalancer {
                     Metrics.recordDelayMs(delayMs);
                 }
 
-                // Forward: only forward() call (network + storage I/O, no LB delay)
-                long fwdStart = System.nanoTime();
-                String resp = forward(node, req.payload);
-                long forwardMs = (System.nanoTime() - fwdStart) / 1_000_000L;
-                Metrics.recordForwardMs(forwardMs);
+                // Forward: network + storage I/O, no LB delay.
+                // For LOAD/DELETE we may try primary + one fallback on NOT_FOUND.
+                long forwardMsTotal = 0L;
+                String resp;
+
+                boolean usedFallback = false;
+
+                if (req.fileOp && (isLoad || isDelete) && fallbackNode != null) {
+                    // First attempt: primary node
+                    long fwdStart = System.nanoTime();
+                    resp = forward(primaryNode, req.payload);
+                    forwardMsTotal += (System.nanoTime() - fwdStart) / 1_000_000L;
+
+                    boolean notFound = resp != null && resp.toUpperCase(Locale.ROOT).startsWith("ERR NOT_FOUND");
+
+                    if (notFound) {
+                        usedFallback = true;
+                        // Second attempt: fallback node
+                        long fwdStart2 = System.nanoTime();
+                        String resp2 = forward(fallbackNode, req.payload);
+                        forwardMsTotal += (System.nanoTime() - fwdStart2) / 1_000_000L;
+
+                        // If fallback succeeds (anything other than ERR NOT_FOUND), use that response.
+                        if (resp2 != null && !resp2.toUpperCase(Locale.ROOT).startsWith("ERR NOT_FOUND")) {
+                            resp = resp2;
+                        }
+
+                        // Minimal debug logging for demo: file, primary, fallback used.
+                        String fileKey = extractFileKeyForDebug(trimmed);
+                        String primaryName = getNodeStorageName(primaryNode);
+                        String fallbackName = getNodeStorageName(fallbackNode);
+                        System.out.println("[LB debug] op=" + (isLoad ? "LOAD" : "DELETE") +
+                                " file=" + fileKey +
+                                " primary=" + primaryName +
+                                " fallbackUsed=" + usedFallback +
+                                " fallbackNode=" + fallbackName);
+                    }
+                } else {
+                    long fwdStart = System.nanoTime();
+                    resp = forward(primaryNode, req.payload);
+                    forwardMsTotal += (System.nanoTime() - fwdStart) / 1_000_000L;
+                }
+
+                Metrics.recordForwardMs(forwardMsTotal);
                 routedReq.incrementAndGet();
                 req.future.complete(resp);
 
@@ -448,6 +506,24 @@ public class LoadBalancer {
         }
 
         return Math.floorMod(key.hashCode(), NODES.size());
+    }
+
+    // Helper used only for debug logging.
+    private static String extractFileKeyForDebug(String payload) {
+        String line = payload.trim();
+        String upper = line.toUpperCase(Locale.ROOT);
+
+        if (upper.startsWith("STORE ")) {
+            String[] parts = line.split("\\s+", 3);
+            if (parts.length >= 2) return parts[1];
+        } else if (upper.startsWith("LOAD ")) {
+            String[] parts = line.split("\\s+", 2);
+            if (parts.length >= 2) return parts[1];
+        } else if (upper.startsWith("DELETE ")) {
+            String[] parts = line.split("\\s+", 2);
+            if (parts.length >= 2) return parts[1];
+        }
+        return line;
     }
 
     private static void maybeDelay() {
