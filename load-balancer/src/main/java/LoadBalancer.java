@@ -422,8 +422,31 @@ public class LoadBalancer {
     }
 
     private static int stableIndex(String payload) {
-        String[] parts = payload.trim().split("\\s+");
-        String key = (parts.length >= 2) ? parts[1] : payload;
+        // Deterministic routing based on the *file key* so that the same
+        // filename always maps to the same storage node, regardless of the
+        // specific operation (STORE/LOAD/DELETE) or any extra arguments.
+        String line = payload.trim();
+        String upper = line.toUpperCase(Locale.ROOT);
+
+        String key = line; // fallback
+
+        if (upper.startsWith("STORE ")) {
+            // STORE <filename> <base64>
+            String[] parts = line.split("\\s+", 3);
+            if (parts.length >= 2) key = parts[1];
+        } else if (upper.startsWith("LOAD ")) {
+            // LOAD <filename>
+            String[] parts = line.split("\\s+", 2);
+            if (parts.length >= 2) key = parts[1];
+        } else if (upper.startsWith("DELETE ")) {
+            // DELETE <filename>
+            String[] parts = line.split("\\s+", 2);
+            if (parts.length >= 2) key = parts[1];
+        } else {
+            // Other file-ish commands (LIST, MKDIR, etc.) just hash on payload.
+            key = line;
+        }
+
         return Math.floorMod(key.hashCode(), NODES.size());
     }
 
