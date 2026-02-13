@@ -306,19 +306,21 @@ public class LoadBalancer {
 
                 String trimmed = req.payload.trim();
                 String upper = trimmed.toUpperCase(Locale.ROOT);
+                boolean isStore = upper.startsWith("STORE ");
                 boolean isLoad = upper.startsWith("LOAD ");
                 boolean isDelete = upper.startsWith("DELETE ");
 
-                if (req.fileOp && (isLoad || isDelete)) {
-                    // For LOAD/DELETE, use deterministic filename-based routing,
-                    // with a single fallback to the other node if NOT_FOUND.
+                if (req.fileOp && (isStore || isLoad || isDelete)) {
+                    // For STORE/LOAD/DELETE, use deterministic filename-based routing.
                     int primaryIdx = stableIndex(trimmed);
                     primaryNode = NODES.get(primaryIdx);
-                    if (NODES.size() > 1) {
+
+                    // For LOAD/DELETE only, allow a single fallback to the other node on NOT_FOUND.
+                    if ((isLoad || isDelete) && NODES.size() > 1) {
                         fallbackNode = NODES.get((primaryIdx + 1) % NODES.size());
                     }
                 } else {
-                    // Existing health-based routing for other ops.
+                    // Existing health-based routing for non-keyed ops (e.g. PING, STATS).
                     primaryNode = pickHealthyNode(req.payload, req.fileOp);
                     if (primaryNode == null) {
                         rejectedReq.incrementAndGet();
