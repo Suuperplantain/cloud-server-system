@@ -1,5 +1,4 @@
 import java.sql.*;
-import java.util.UUID;
 
 public class SessionStore {
 
@@ -23,8 +22,7 @@ public class SessionStore {
         }
     }
 
-    public static String createSession(String username) {
-        String token = UUID.randomUUID().toString();
+    public static String createSession(String username, String token) {
         try (Connection c = DriverManager.getConnection(DB_URL);
              PreparedStatement ps = c.prepareStatement(
                      "INSERT INTO sessions(username, token) VALUES(?,?)")) {

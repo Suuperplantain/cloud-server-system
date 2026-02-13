@@ -12,7 +12,13 @@ public class MainController {
     @FXML private TextField filenameField;
     @FXML private TextArea contentArea;
 
+    private String username;
+    private String token;
+
     public void setSession(String username, String token) {
+        this.username = username;
+        this.token = token;
+
         sessionLabel.setText("Session: " + SessionStore.latestSessionInfo());
         outputArea.setText("");
         outputArea.appendText("Logged in as: " + username + "\n");
@@ -23,6 +29,14 @@ public class MainController {
         outputArea.appendText(s + "\n");
     }
 
+    private boolean ensureLoggedIn() {
+        if (token == null || token.isEmpty()) {
+            log("ERR Not logged in");
+            return false;
+        }
+        return true;
+    }
+
     @FXML
     private void onPing() {
         try { log(">> PING"); log(TcpClient.send("PING")); }
@@ -31,41 +45,54 @@ public class MainController {
 
     @FXML
     private void onList() {
-        try { log(">> LIST"); log(TcpClient.send("LIST")); }
-        catch (Exception e) { log("ERROR: " + e.getMessage()); }
+        if (!ensureLoggedIn()) return;
+        try {
+            String cmd = "AUTH " + token + " LIST";
+            log(">> " + cmd);
+            log(TcpClient.send(cmd));
+        } catch (Exception e) { log("ERROR: " + e.getMessage()); }
     }
 
     @FXML
     private void onStore() {
+        if (!ensureLoggedIn()) return;
+
         String filename = filenameField.getText().trim();
         String content = contentArea.getText();
         if (filename.isEmpty()) { log("ERROR: filename required"); return; }
 
         try {
             String b64 = Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8));
-            log(">> STORE " + filename);
-            log(TcpClient.send("STORE " + filename + " " + b64));
+            String cmd = "AUTH " + token + " STORE " + filename + " " + b64;
+            log(">> " + cmd);
+            log(TcpClient.send(cmd));
         } catch (Exception e) { log("ERROR: " + e.getMessage()); }
     }
 
     @FXML
     private void onLoad() {
+        if (!ensureLoggedIn()) return;
+
         String filename = filenameField.getText().trim();
         if (filename.isEmpty()) { log("ERROR: filename required"); return; }
 
         try {
-            log(">> LOAD " + filename);
-            String resp = TcpClient.send("LOAD " + filename);
+            String cmd = "AUTH " + token + " LOAD " + filename;
+            log(">> " + cmd);
+            String resp = TcpClient.send(cmd);
             log(resp);
 
-            if (resp.startsWith("OK:")) {
+            // Optional: if response seems to contain base64 data, decode into content area.
+            if (resp.startsWith("OK")) {
                 String[] parts = resp.split("\\s+");
-                if (parts.length >= 3) {
-                    String b64 = parts[2];
+                if (parts.length >= 2) {
+                    String possibleB64 = parts[parts.length - 1];
                     try {
-                        byte[] bytes = Base64.getDecoder().decode(b64);
+                        byte[] bytes = Base64.getDecoder().decode(possibleB64);
                         contentArea.setText(new String(bytes, StandardCharsets.UTF_8));
-                    } catch (Exception ignored) {}
+                    } catch (IllegalArgumentException ignored) {
+                        // Not valid base64; leave content area unchanged.
+                    }
                 }
             }
         } catch (Exception e) { log("ERROR: " + e.getMessage()); }
@@ -73,12 +100,15 @@ public class MainController {
 
     @FXML
     private void onDelete() {
+        if (!ensureLoggedIn()) return;
+
         String filename = filenameField.getText().trim();
         if (filename.isEmpty()) { log("ERROR: filename required"); return; }
 
         try {
-            log(">> DELETE " + filename);
-            log(TcpClient.send("DELETE " + filename));
+            String cmd = "AUTH " + token + " DELETE " + filename;
+            log(">> " + cmd);
+            log(TcpClient.send(cmd));
         } catch (Exception e) { log("ERROR: " + e.getMessage()); }
     }
 }

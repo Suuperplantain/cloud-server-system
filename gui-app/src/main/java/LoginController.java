@@ -4,6 +4,9 @@ import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.stage.Stage;
 
+import java.io.IOException;
+import java.util.UUID;
+
 public class LoginController {
 
     @FXML private TextField usernameField;
@@ -13,28 +16,96 @@ public class LoginController {
     @FXML
     private void onLogin() {
         String user = usernameField.getText().trim();
+        String pass = passwordField.getText();
 
         if (user.isEmpty()) {
             statusLabel.setText("Enter a username.");
             return;
         }
+        if (pass == null || pass.isEmpty()) {
+            statusLabel.setText("Enter a password.");
+            return;
+        }
 
-        // GUI-first: local SQLite session
-        String token = SessionStore.createSession(user);
-
+        String response;
         try {
-            FXMLLoader loader = new FXMLLoader(getClass().getResource("/main.fxml"));
-            Scene scene = new Scene(loader.load(), 900, 560);
+            // Send exactly: LOGIN <username> <password>
+            response = TcpClient.send("LOGIN " + user + " " + pass);
+        } catch (IOException e) {
+            statusLabel.setText("Login failed: " + e.getMessage());
+            return;
+        }
 
-            MainController ctrl = loader.getController();
-            ctrl.setSession(user, token);
+        if (response == null) {
+            statusLabel.setText("Login failed: empty response from server");
+            return;
+        }
 
-            Stage stage = (Stage) usernameField.getScene().getWindow();
-            stage.setScene(scene);
-            stage.setResizable(true);
-            stage.centerOnScreen();
-        } catch (Exception e) {
-            statusLabel.setText("Failed to open main screen: " + e.getMessage());
+        // Only succeed if response starts with "OK TOKEN " and the token is a valid UUID.
+        if (response.startsWith("OK TOKEN ")) {
+            String[] parts = response.split("\\s+");
+            if (parts.length >= 3) {
+                String token = parts[2];
+                try {
+                    UUID.fromString(token); // validate UUID
+
+                    // Persist session and open main screen
+                    SessionStore.createSession(user, token);
+
+                    try {
+                        FXMLLoader loader = new FXMLLoader(getClass().getResource("/main.fxml"));
+                        Scene scene = new Scene(loader.load(), 900, 560);
+
+                        MainController ctrl = loader.getController();
+                        ctrl.setSession(user, token);
+
+                        Stage stage = (Stage) usernameField.getScene().getWindow();
+                        stage.setScene(scene);
+                        stage.setResizable(true);
+                        stage.centerOnScreen();
+                    } catch (Exception e) {
+                        statusLabel.setText("Failed to open main screen: " + e.getMessage());
+                    }
+                    return;
+                } catch (IllegalArgumentException ignored) {
+                    // fall through to error handling below
+                }
+            }
+        }
+
+        // Any other response is a login failure; show raw backend response.
+        statusLabel.setText(response);
+    }
+
+    @FXML
+    private void onRegister() {
+        String user = usernameField.getText().trim();
+        String pass = passwordField.getText();
+
+        if (user.isEmpty() || pass == null || pass.isEmpty()) {
+            statusLabel.setText("Enter username and password.");
+            return;
+        }
+
+        String response;
+        try {
+            // Send exactly: REGISTER <username> <password>
+            response = TcpClient.send("REGISTER " + user + " " + pass);
+        } catch (IOException e) {
+            statusLabel.setText("Register failed: " + e.getMessage());
+            return;
+        }
+
+        if (response == null) {
+            statusLabel.setText("Register failed: empty response from server");
+            return;
+        }
+
+        // Show raw backend response by default; mildly friendlier text on success.
+        if (response.startsWith("OK")) {
+            statusLabel.setText("Registered. Now login.");
+        } else {
+            statusLabel.setText(response);
         }
     }
 }
