@@ -28,8 +28,8 @@
             </GridPane>
 
             <HBox spacing="10" alignment="CENTER">
-                <Button text="Login" onAction="#onLogin" defaultButton="true"/>
-                <Button text="Register" onAction="#onRegister"/>
+                <Button fx:id="loginButton" text="Login" onAction="#onLogin" defaultButton="true"/>
+                <Button fx:id="registerButton" text="Register" onAction="#onRegister"/>
             </HBox>
 
             <Label fx:id="statusLabel" textFill="red"/>

@@ -1,3 +1,4 @@
+import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.*;
 
@@ -11,6 +12,12 @@ public class MainController {
 
     @FXML private TextField filenameField;
     @FXML private TextArea contentArea;
+
+    @FXML private Button pingButton;
+    @FXML private Button listButton;
+    @FXML private Button storeButton;
+    @FXML private Button loadButton;
+    @FXML private Button deleteButton;
 
     private String username;
     private String token;
@@ -37,8 +44,18 @@ public class MainController {
         return true;
     }
 
+    private void setBusy(boolean busy) {
+        if (listButton != null) listButton.setDisable(busy);
+        if (storeButton != null) storeButton.setDisable(busy);
+        if (loadButton != null) loadButton.setDisable(busy);
+        if (deleteButton != null) deleteButton.setDisable(busy);
+        if (filenameField != null) filenameField.setDisable(busy);
+        if (contentArea != null) contentArea.setDisable(busy);
+    }
+
     @FXML
     private void onPing() {
+        // PING is quick; can stay synchronous.
         try { log(">> PING"); log(TcpClient.send("PING")); }
         catch (Exception e) { log("ERROR: " + e.getMessage()); }
     }
@@ -46,69 +63,132 @@ public class MainController {
     @FXML
     private void onList() {
         if (!ensureLoggedIn()) return;
-        try {
-            String cmd = "AUTH " + token + " LIST";
-            log(">> " + cmd);
-            log(TcpClient.send(cmd));
-        } catch (Exception e) { log("ERROR: " + e.getMessage()); }
+
+        final String cmd = "AUTH " + token + " LIST";
+        log(">> " + cmd);
+        setBusy(true);
+        outputArea.appendText("Working...\n");
+
+        new Thread(() -> {
+            String result;
+            try {
+                result = TcpClient.send(cmd);
+            } catch (Exception e) {
+                result = "ERROR: " + e.getMessage();
+            }
+
+            final String toLog = result;
+            Platform.runLater(() -> {
+                log(toLog);
+                setBusy(false);
+            });
+        }, "list-request-thread").start();
     }
 
     @FXML
     private void onStore() {
         if (!ensureLoggedIn()) return;
 
-        String filename = filenameField.getText().trim();
-        String content = contentArea.getText();
+        final String filename = filenameField.getText().trim();
+        final String content = contentArea.getText();
         if (filename.isEmpty()) { log("ERROR: filename required"); return; }
 
-        try {
-            String b64 = Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8));
-            String cmd = "AUTH " + token + " STORE " + filename + " " + b64;
-            log(">> " + cmd);
-            log(TcpClient.send(cmd));
-        } catch (Exception e) { log("ERROR: " + e.getMessage()); }
+        final String b64 = Base64.getEncoder().encodeToString(content.getBytes(StandardCharsets.UTF_8));
+        final String cmd = "AUTH " + token + " STORE " + filename + " " + b64;
+        log(">> " + cmd);
+        setBusy(true);
+        outputArea.appendText("Working...\n");
+
+        new Thread(() -> {
+            String result;
+            try {
+                result = TcpClient.send(cmd);
+            } catch (Exception e) {
+                result = "ERROR: " + e.getMessage();
+            }
+
+            final String toLog = result;
+            Platform.runLater(() -> {
+                log(toLog);
+                setBusy(false);
+            });
+        }, "store-request-thread").start();
     }
 
     @FXML
     private void onLoad() {
         if (!ensureLoggedIn()) return;
 
-        String filename = filenameField.getText().trim();
+        final String filename = filenameField.getText().trim();
         if (filename.isEmpty()) { log("ERROR: filename required"); return; }
 
-        try {
-            String cmd = "AUTH " + token + " LOAD " + filename;
-            log(">> " + cmd);
-            String resp = TcpClient.send(cmd);
-            log(resp);
+        final String cmd = "AUTH " + token + " LOAD " + filename;
+        log(">> " + cmd);
+        setBusy(true);
+        outputArea.appendText("Working...\n");
 
-            // Optional: if response seems to contain base64 data, decode into content area.
+        new Thread(() -> {
+            String resp;
+            try {
+                resp = TcpClient.send(cmd);
+            } catch (Exception e) {
+                resp = "ERROR: " + e.getMessage();
+            }
+
+            final String decodedContent;
             if (resp.startsWith("OK")) {
+                String possibleContent = null;
                 String[] parts = resp.split("\\s+");
                 if (parts.length >= 2) {
                     String possibleB64 = parts[parts.length - 1];
                     try {
                         byte[] bytes = Base64.getDecoder().decode(possibleB64);
-                        contentArea.setText(new String(bytes, StandardCharsets.UTF_8));
+                        possibleContent = new String(bytes, StandardCharsets.UTF_8);
                     } catch (IllegalArgumentException ignored) {
-                        // Not valid base64; leave content area unchanged.
+                        // Not valid base64; leave content unchanged.
                     }
                 }
+                decodedContent = possibleContent;
+            } else {
+                decodedContent = null;
             }
-        } catch (Exception e) { log("ERROR: " + e.getMessage()); }
+
+            final String toLog = resp;
+            Platform.runLater(() -> {
+                log(toLog);
+                if (decodedContent != null) {
+                    contentArea.setText(decodedContent);
+                }
+                setBusy(false);
+            });
+        }, "load-request-thread").start();
     }
 
     @FXML
     private void onDelete() {
         if (!ensureLoggedIn()) return;
 
-        String filename = filenameField.getText().trim();
+        final String filename = filenameField.getText().trim();
         if (filename.isEmpty()) { log("ERROR: filename required"); return; }
 
-        try {
-            String cmd = "AUTH " + token + " DELETE " + filename;
-            log(">> " + cmd);
-            log(TcpClient.send(cmd));
-        } catch (Exception e) { log("ERROR: " + e.getMessage()); }
+        final String cmd = "AUTH " + token + " DELETE " + filename;
+        log(">> " + cmd);
+        setBusy(true);
+        outputArea.appendText("Working...\n");
+
+        new Thread(() -> {
+            String result;
+            try {
+                result = TcpClient.send(cmd);
+            } catch (Exception e) {
+                result = "ERROR: " + e.getMessage();
+            }
+
+            final String toLog = result;
+            Platform.runLater(() -> {
+                log(toLog);
+                setBusy(false);
+            });
+        }, "delete-request-thread").start();
     }
 }

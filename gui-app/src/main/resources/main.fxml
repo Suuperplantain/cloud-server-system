@@ -21,11 +21,11 @@
                 <padding><Insets top="10" right="10" bottom="10" left="10"/></padding>
 
                 <HBox spacing="10">
-                    <Button text="PING" onAction="#onPing"/>
-                    <Button text="LIST" onAction="#onList"/>
-                    <Button text="STORE" onAction="#onStore"/>
-                    <Button text="LOAD" onAction="#onLoad"/>
-                    <Button text="DELETE" onAction="#onDelete"/>
+                    <Button fx:id="pingButton" text="PING" onAction="#onPing"/>
+                    <Button fx:id="listButton" text="LIST" onAction="#onList"/>
+                    <Button fx:id="storeButton" text="STORE" onAction="#onStore"/>
+                    <Button fx:id="loadButton" text="LOAD" onAction="#onLoad"/>
+                    <Button fx:id="deleteButton" text="DELETE" onAction="#onDelete"/>
                 </HBox>
 
                 <GridPane hgap="10" vgap="10">
