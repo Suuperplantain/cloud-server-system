@@ -192,6 +192,13 @@ public class AuthAclService {
     // --- ACL ---
     public static void ensureOwnerRW(String owner, String filename) throws SQLException {
         try (Connection c = db()) {
+            // Record file ownership for LB permission checks (getOwner uses 'files' table)
+            try (PreparedStatement insFile = c.prepareStatement(
+                    "INSERT INTO files(owner, filename) VALUES(?,?)")) {
+                insFile.setString(1, owner);
+                insFile.setString(2, filename);
+                insFile.executeUpdate();
+            }
             try (PreparedStatement upd = c.prepareStatement(
                     "UPDATE acl SET can_read=1, can_write=1 WHERE owner=? AND filename=? AND grantee=?")) {
                 upd.setString(1, owner);
