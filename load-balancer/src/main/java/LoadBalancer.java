@@ -460,18 +460,41 @@ public class LoadBalancer {
     }
 
     private static String forward(Node node, String payload) {
-        try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(node.host, node.port), 2000);
-            s.setSoTimeout(240000);
-            PrintWriter out = new PrintWriter(new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true);
-            BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
-            out.println(payload);
-            String resp = in.readLine();
-            return (resp == null) ? "ERROR: Empty response" : resp;
-        } catch (Exception e) {
-            return "ERROR: Forward failed: " + e.getMessage();
+    try (Socket s = new Socket()) {
+        s.connect(new InetSocketAddress(node.host, node.port), 2000);
+
+        // Long timeout for first line (covers intentional LB delay or slow storage)
+        s.setSoTimeout(240000);
+
+        PrintWriter out = new PrintWriter(
+                new OutputStreamWriter(s.getOutputStream(), StandardCharsets.UTF_8), true);
+        BufferedReader in = new BufferedReader(
+                new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8));
+
+        out.println(payload);
+
+        String first = in.readLine();
+        if (first == null) return "ERROR: Empty response";
+
+        StringBuilder sb = new StringBuilder(first);
+
+        // Short timeout for any additional lines (e.g., LIST output)
+        s.setSoTimeout(200);
+        while (true) {
+            try {
+                String line = in.readLine();
+                if (line == null) break;
+                sb.append("\n").append(line);
+            } catch (java.net.SocketTimeoutException e) {
+                break;
+            }
         }
+        return sb.toString();
+    } catch (Exception e) {
+        return "ERROR: Forward failed: " + e.getMessage();
     }
+}
+
 
     private static boolean isFileOp(String line) {
         String p = line.trim().toUpperCase();
