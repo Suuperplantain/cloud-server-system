@@ -629,27 +629,12 @@ Recommended next steps for future development:
 
 ---
 
-## Why This Project Stands Out
 
-This project is more than a simple file server. It combines multiple ideas that are often implemented separately:
 
-- distributed routing
-- authentication
-- authorisation
-- desktop client interaction
-- database-backed metadata
-- observability
-- Docker deployment
-
-That makes it a strong portfolio project for demonstrating practical understanding of systems design, backend communication, and service orchestration in Java.
-
----
 
 ## License
 
-Add your preferred license here, for example MIT, Apache-2.0, or a university/project-specific license.
-
-If you do not want others reusing the code freely, do not leave this section empty on GitHub.
+University project All rights reserved.
 
 ---
 
