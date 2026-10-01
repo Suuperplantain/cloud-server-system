@@ -597,6 +597,7 @@ public class LoadBalancer {
             this.length = payload.length();
         }
 
+        // SJN orders by payload size; RR and FCFS retain arrival order because RR only selects a node.
         long priorityKey() {
             if (algo == Algo.SJN) return length;
             return enqueuedAtNs;
